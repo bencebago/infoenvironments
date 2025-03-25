@@ -1,0 +1,294 @@
+---
+title: "study1"
+author: "Bence Bago"
+date: "2025-03-25"
+output: html_document
+---
+
+```{r library}
+
+library(tidyverse)
+library(jsonlite)
+library(httr)
+
+
+```
+
+
+```{r management}
+
+column_names <- names(read.csv("context effect in news choice_March 25, 2025_01.15.csv", nrows = 1))
+
+df <- read.csv("context effect in news choice_March 25, 2025_01.15.csv", sep=",", skip = 85, header = FALSE)
+
+names(df) <- column_names
+
+# Define the headline sets as a named list
+headline_sets <- list(
+  "ai-contra" = c(
+    "Dangers of artificial intelligence in medicine",
+    "Warnings of a Dark Side to A.I. in Health Care",
+    "AI models fall short in medical coding accuracy",
+    "AI’s huge potential to improve healthcare"
+  ),
+  "ai-pro" = c(
+    "Dangers of artificial intelligence in medicine",
+    "Less burnout for doctors, better clinical trials, among the benefits of AI in healthcare",
+    "How AI is set to transform our health: Drug research, vaccines, disability support and more set to benefit",
+    "AI’s huge potential to improve healthcare"
+  ),
+  "renewables-contra" = c(
+    "Study shows renewables raise food prices",
+    "Renewables are more costly and risky the deeper you dig",
+    "What Are The Disadvantages Of Solar Energy?",
+    "Green energy is cheaper than fossil fuels, a new study finds"
+  ),
+  "renewables-pro" = c(
+    "Study shows renewables raise food prices",
+    "New Financial Analysis Finds Significant Economic Benefits from Clean Energy Transition",
+    "Clean energy drives job growth in US energy sector",
+    "Green energy is cheaper than fossil fuels, a new study finds"
+  ),
+  "minimum-contra" = c(
+    "Raising the Minimum Wage Will Definitely Cost Jobs",
+    "Higher minimum wages may increase homelessness",
+    "Unintended consequences of minimum wage mandates",
+    "The federal minimum wage is poverty pay, raise it"
+  ),
+  "minimum-pro" = c(
+    "Raising the Minimum Wage Will Definitely Cost Jobs",
+    "After 25 years of stagnation, it’s time to raise the minimum wage",
+    "Minimum wage rise gives boost to 2.7 million lowest-paid",
+    "The federal minimum wage is poverty pay, raise it"
+  )
+)
+
+# Parse the responses and go long
+long_df <- df %>%
+  select(ResponseId, headlineSet, headlineResponses, everything()) %>%
+  mutate(parsed = map(headlineResponses, ~ tryCatch(fromJSON(.x), error = function(e) NULL))) %>%
+  unnest_longer(parsed, values_to = "rating", indices_to = "headline") %>%
+  mutate(
+    index_in_set = map2_int(headlineSet, headline, function(set, headline) {
+      match(headline, headline_sets[[set]]) - 1  # make 0-based index like Python if needed
+    })
+  )
+
+# View results
+head(long_df)
+
+```
+
+
+```{r pressure, echo=FALSE}
+
+
+filtered_df <- long_df %>%
+  filter(index_in_set %in% c(0, 3)) %>%
+  mutate(
+    treatment = case_when(
+      str_detect(headlineSet, "contra") ~ "contra",
+      str_detect(headlineSet, "pro") ~ "pro",
+      TRUE ~ NA_character_
+    )
+  )
+
+filtered_df <- filtered_df %>%
+  mutate(
+    MajorityMinority = case_when(
+      (treatment == "contra" & index_in_set == 0) |
+      (treatment == "pro" & index_in_set == 3) ~ "Majority",
+      
+      (treatment == "contra" & index_in_set == 3) |
+      (treatment == "pro" & index_in_set == 0) ~ "Minority",
+      
+      TRUE ~ NA_character_
+    )
+  )
+
+filtered_df %>% select(ResponseId, headlineSet, treatment, index_in_set, MajorityMinority, headline, rating) %>% head()
+
+
+library(ggplot2)
+
+# Summarize average rating and standard error by MajorityMinority group
+plot_data <- filtered_df %>%
+  group_by(MajorityMinority) %>%
+  summarise(
+    mean_rating = mean(as.numeric(rating), na.rm = TRUE),
+    se_rating = sd(as.numeric(rating), na.rm = TRUE) / sqrt(n())
+  )
+
+# Plot
+ggplot(plot_data, aes(x = MajorityMinority, y = mean_rating, fill = MajorityMinority)) +
+  geom_bar(stat = "identity", color = "black", width = 0.6) +
+  geom_errorbar(aes(ymin = mean_rating - se_rating, ymax = mean_rating + se_rating),
+                width = 0.2, linewidth = 0.8) +
+  labs(
+    x = "Group",
+    y = "Average Rating",
+    title = "Average Headline Ratings by Majority/Minority Status"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+plot_data <- filtered_df %>%
+  group_by(treatment, MajorityMinority) %>%
+  summarise(
+    mean_rating = mean(as.numeric(rating), na.rm = TRUE),
+    se_rating = sd(as.numeric(rating), na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+# Plot with facet for treatment
+ggplot(plot_data, aes(x = MajorityMinority, y = mean_rating, fill = MajorityMinority)) +
+  geom_bar(stat = "identity", color = "black", width = 0.6) +
+  geom_errorbar(aes(ymin = mean_rating - se_rating, ymax = mean_rating + se_rating),
+                width = 0.2, linewidth = 0.8) +
+  facet_wrap(~ treatment) +
+  labs(
+    x = "Group",
+    y = "Average Rating",
+    title = "Average Headline Ratings by Majority/Minority and Treatment"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+filtered_df <- filtered_df %>%
+  mutate(
+    topic = str_extract(headlineSet, "^[^-]+")  # everything before the first dash
+  )
+
+# Summarize by topic, treatment, and MajorityMinority
+plot_data <- filtered_df %>%
+  group_by(topic, treatment, MajorityMinority) %>%
+  summarise(
+    mean_rating = mean(as.numeric(rating), na.rm = TRUE),
+    se_rating = sd(as.numeric(rating), na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+# Plot
+ggplot(plot_data, aes(x = MajorityMinority, y = mean_rating, fill = MajorityMinority)) +
+  geom_bar(stat = "identity", color = "black", width = 0.6) +
+  geom_errorbar(aes(ymin = mean_rating - se_rating, ymax = mean_rating + se_rating),
+                width = 0.2, linewidth = 0.8) +
+  facet_grid(treatment ~ topic) +  # treatment as rows, topic as columns
+  labs(
+    x = "Group",
+    y = "Average Rating",
+    title = "Headline Ratings by Majority/Minority, Topic, and Treatment"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+filtered_df <- filtered_df %>%
+  mutate(
+    prior = case_when(
+      topic == "ai" ~ as.numeric(prior_AI_1),
+      topic == "minimum" ~ as.numeric(prior_minimum_1),
+      topic == "renewables" ~ as.numeric(prior_renewables_1),
+      TRUE ~ NA_real_
+    )
+  )
+
+# Step 2: Create a high/low prior belief group using a median split
+filtered_df <- filtered_df %>%
+  group_by(topic) %>%
+  mutate(
+    prior_group = ifelse(prior > median(prior, na.rm = TRUE), "High Prior", "Low Prior")
+  ) %>%
+  ungroup()
+
+# Step 1: Rename prior_group labels
+filtered_df <- filtered_df %>%
+  mutate(
+    prior_group = case_when(
+      prior_group == "Low Prior" ~ "Contra-consistent Prior",
+      prior_group == "High Prior" ~ "Pro-consistent Prior",
+      TRUE ~ prior_group
+    )
+  )
+
+# Step 2: Re-summarize the data without topic
+plot_data <- filtered_df %>%
+  group_by(treatment, MajorityMinority, prior_group) %>%
+  summarise(
+    mean_rating = mean(as.numeric(rating), na.rm = TRUE),
+    se_rating = sd(as.numeric(rating), na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+# Step 3: Plot
+ggplot(plot_data, aes(x = MajorityMinority, y = mean_rating, fill = MajorityMinority)) +
+  geom_bar(stat = "identity", position = position_dodge(0.8), width = 0.6, color = "black") +
+  geom_errorbar(aes(ymin = mean_rating - se_rating, ymax = mean_rating + se_rating),
+                position = position_dodge(0.8), width = 0.2, linewidth = 0.8) +
+  facet_grid(prior_group ~ treatment) +
+  labs(
+    x = "Majority vs Minority",
+    y = "Average Rating",
+    title = "Headline Ratings by Prior Belief Consistency, Treatment, and Group"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+filtered_df <- filtered_df %>%
+  mutate(
+    prior = as.numeric(prior),
+    rating = as.numeric(rating),
+    Headline = ifelse(index_in_set==0, "Contra", 'Pro'),
+    Treatment = ifelse(treatment=='contra', 'Contra Majority', 'Pro Majority')
+  )
+
+# Plot: Rating ~ Prior, colored by MajorityMinority
+ggplot(filtered_df, aes(x = prior, y = rating, color = MajorityMinority)) +
+  geom_point(alpha = 0.3, size = 1) +
+  geom_smooth(method = "lm",  se = TRUE, linewidth = 1.2) +
+ # facet_grid(. ~ Headline + topic) +
+  labs(
+    x = "Prior Belief (Continuous)",
+    y = "Headline Rating",
+    color = "Information environment",
+    title = "Headline Ratings by Prior Belief, Information Environment, Target Headline"
+  ) +
+  theme_minimal()
+
+cor.test(filtered_df[filtered_df$Treatment=='Contra Majority Environment'& filtered_df$Headline=='Contra Headline',]$rating, filtered_df[filtered_df$Treatment=='Contra Majority Environment'& filtered_df$Headline=='Contra Headline',]$prior)
+
+cor.test(filtered_df[filtered_df$Treatment=='Pro Majority Environment'& filtered_df$Headline=='Contra Headline',]$rating, filtered_df[filtered_df$Treatment=='Pro Majority Environment'& filtered_df$Headline=='Contra Headline',]$prior)
+
+
+cor.test(filtered_df[filtered_df$Treatment=='Contra Majority Environment'& filtered_df$Headline=='Pro Headline',]$rating, filtered_df[filtered_df$Treatment=='Contra Majority Environment'& filtered_df$Headline=='Pro Headline',]$prior)
+
+cor.test(filtered_df[filtered_df$Treatment=='Pro Majority Environment'& filtered_df$Headline=='Pro Headline',]$rating, filtered_df[filtered_df$Treatment=='Pro Majority Environment' & filtered_df$Headline=='Pro Headline',]$prior)
+
+
+#prior matters more when evaluating the 'unique' headline
+
+
+
+# Step 1: Parse the headlineOrder and get numeric order
+filtered_df <- filtered_df %>%
+  mutate(
+    headlineOrder_parsed = map(headlineOrder, ~ tryCatch(fromJSON(.x), error = function(e) NULL))
+  )
+
+# Step 2: Assign presentation order for each headline
+filtered_df <- filtered_df %>%
+  mutate(
+    presentation_order = map2_int(headline, headlineOrder_parsed, function(h, order_vec) {
+      match(h, order_vec)
+    })
+  )
+
+# View a few examples
+filtered_df %>%
+  select(ResponseId, headline, presentation_order, rating, Treatment, Headline) %>%
+  head()
+
+
+```
+
