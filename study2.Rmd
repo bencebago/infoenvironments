@@ -17,9 +17,9 @@ library(httr)
 
 ```{r management}
 
-column_names <- names(read.csv("context effect in news choice_March 25, 2025_01.15.csv", nrows = 1))
+column_names <- names(read.csv("context effect in news choice S2_April 4, 2025_00.47.csv", nrows = 1))
 
-df <- read.csv("context effect in news choice_March 25, 2025_01.15.csv", sep=",", skip = 85, header = FALSE)
+df <- read.csv("context effect in news choice S2_April 4, 2025_00.47.csv", sep=",", skip = 80, header = FALSE)
 
 names(df) <- column_names
 
@@ -285,8 +285,8 @@ filtered_df <- filtered_df %>%
   )
 
 plot_data <- filtered_df %>%
-    filter(presentation_order==3|presentation_order==4)%>%
-  group_by(Headline, Treatment) %>%
+    filter(presentation_order==1|presentation_order==2)%>%
+  group_by(Headline, Treatment, topic) %>%
   summarise(
     mean_rating = mean(as.numeric(rating), na.rm = TRUE),
     se_rating = sd(as.numeric(rating), na.rm = TRUE) / sqrt(n())
@@ -297,7 +297,7 @@ ggplot(plot_data, aes(x = Treatment, y = mean_rating)) +
   geom_bar(stat = "identity", color = "black", width = 0.6) +
   geom_errorbar(aes(ymin = mean_rating - se_rating, ymax = mean_rating + se_rating),
                 width = 0.2, linewidth = 0.8) +
-  facet_grid(. ~ Headline) +
+  facet_grid(. ~ Headline + topic) +
 
   labs(
     x = "Group",
@@ -307,7 +307,17 @@ ggplot(plot_data, aes(x = Treatment, y = mean_rating)) +
   theme_minimal() +
   theme(legend.position = "none")
 
+library(lmerTest)
+late_df <- filtered_df[filtered_df$presentation_order %in% c(3, 4), ]
 
+# Fit model on subset
+model1 <- lmer(rating ~ scale(prior)*headline_stat + (1|ResponseId), data = late_df)
+
+# Add residuals to that subset only
+late_df$residual_rating <- resid(model1)
+
+model2 <- lmer(residual_rating ~ Treatment*headline_stat + (1|ResponseId), data = late_df)
+summary(model2)
 
 ```
 
